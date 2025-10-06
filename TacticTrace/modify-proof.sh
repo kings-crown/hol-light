@@ -27,5 +27,6 @@ cat ${basedir}/exportTrace.ml >> $output
 echo "(* --- kernel_wrapper.ml --- *)" >> $output
 cat ${basedir}/kernel_wrapper.ml >> $output
 echo "" >> $output
+echo "exptrace_set_dump_directory \"${dumpdir}\";;" >> $output
 tail -n +3 ${output}.org >> $output
 echo "exptrace_dump \"${dumpdir}\";;" >>$output
