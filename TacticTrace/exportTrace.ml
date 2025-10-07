@@ -83,18 +83,42 @@ let exptrace_add_conv (conv_name:string)
         (re_arg_gen:unit -> ExportTrace.record_args) =
   ExportTrace.add_conversion_entry conv_name re (re_arg_gen());;
 
-let exptrace_dump (dir_path:string): unit =
-  Sys.mkdir dir_path 0o777;
-  let substract l1 l2 =
-    List.filter (fun itm -> not (List.mem itm l2)) l1 in
-  let string_of_asm_list l =
-    (List.map (fun th -> "\"" ^ String.escaped (string_of_term (concl (snd th))) ^ "\"") l) in
+let exptrace_dump_dir : string ref = ref ""
 
+let exptrace_set_dump_directory (dir_path:string): unit =
+  exptrace_dump_dir := dir_path
+
+let ensure_dir (dir_path:string): unit =
+  try Sys.mkdir dir_path 0o777 with Sys_error _ -> ()
+
+let sanitize_component (name:string): string =
+  let buf = Buffer.create (String.length name) in
+  String.iter (fun ch ->
+      let code = Char.code ch in
+      let is_alnum =
+        (code >= Char.code 'a' && code <= Char.code 'z') ||
+        (code >= Char.code 'A' && code <= Char.code 'Z') ||
+        (code >= Char.code '0' && code <= Char.code '9') in
+      if is_alnum || ch = '_' || ch = '-' then Buffer.add_char buf ch
+      else Buffer.add_char buf '_') name;
+  let sanitized = Buffer.contents buf in
+  if sanitized = "" then "theorem" else sanitized
+
+let rec drop n lst =
+  match n, lst with
+  | 0, _ -> lst
+  | _, [] -> []
+  | n, _::t -> drop (n-1) t
+
+let dump_logs_to_dir (dir_path:string) (logs:ExportTrace.log_entry list): unit =
+  ensure_dir dir_path;
   let path = dir_path ^ "/trace.json" in
   let oc = open_out path in
-
+  let subtract l1 l2 =
+    List.filter (fun itm -> not (List.mem itm l2)) l1 in
+  let string_of_asm_list l =
+    List.map (fun th -> "\"" ^ String.escaped (string_of_term (concl (snd th))) ^ "\"") l in
   Printf.fprintf oc "[\n";
-  let logs = ExportTrace.get_logs () in
   List.iteri (fun i entry ->
       let sep = if i + 1 = List.length logs then "" else "," in
       match entry with
@@ -168,7 +192,44 @@ let exptrace_dump (dir_path:string): unit =
     logs;
   Printf.fprintf oc "]\n";
   Printf.printf "Dumped to %s\n" path;
-  close_out oc;;
+  close_out oc
+
+let exptrace_dump (dir_path:string): unit =
+  let effective_dir =
+    if dir_path = "" then !exptrace_dump_dir
+    else begin
+      exptrace_set_dump_directory dir_path;
+      dir_path
+    end
+  in
+  if effective_dir = "" then
+    failwith "exptrace_dump: no dump directory configured"
+  else
+    let logs = ExportTrace.get_logs () in
+    dump_logs_to_dir effective_dir logs
+
+let exptrace_with_theorem (theorem_name:string) (thm_thunk:unit -> 'a): 'a =
+  let base_dir = !exptrace_dump_dir in
+  let before_count = List.length (ExportTrace.get_logs ()) in
+  let result =
+    try thm_thunk () with exn ->
+      let after_logs = ExportTrace.get_logs () in
+      if base_dir <> "" then begin
+        let new_entries = drop before_count after_logs in
+        if new_entries <> [] then
+          let theorem_dir = base_dir ^ "/" ^ sanitize_component theorem_name in
+          dump_logs_to_dir theorem_dir new_entries
+      end;
+      raise exn
+  in
+  if base_dir <> "" then begin
+    let after_logs = ExportTrace.get_logs () in
+    let new_entries = drop before_count after_logs in
+    if new_entries <> [] then
+      let theorem_dir = base_dir ^ "/" ^ sanitize_component theorem_name in
+      dump_logs_to_dir theorem_dir new_entries
+  end;
+  result;;
 
 (* a helper function *)
 let rec to_n_elems (r:string list) n:string list =
