@@ -112,87 +112,118 @@ let rec drop n lst =
 
 let dump_logs_to_dir (dir_path:string) (logs:ExportTrace.log_entry list): unit =
   ensure_dir dir_path;
-  let path = dir_path ^ "/trace.json" in
+  let path =
+    let existing =
+      try Array.to_list (Sys.readdir dir_path)
+      with Sys_error _ -> [] in
+    let prefix = "trace_" and suffix = ".json" in
+    let max_idx =
+      List.fold_left
+        (fun acc name ->
+           let prefix_len = String.length prefix and suffix_len = String.length suffix in
+           if String.length name > prefix_len + suffix_len
+              && String.starts_with ~prefix name
+              && String.sub name (String.length name - suffix_len) suffix_len = suffix then
+             let prefix_len = String.length prefix and suffix_len = String.length suffix in
+             let core_len = String.length name - prefix_len - suffix_len in
+             if core_len > 0 then
+               let core = String.sub name prefix_len core_len in
+               match int_of_string_opt core with
+               | Some v when v > acc -> v
+               | _ -> acc
+             else acc
+           else acc)
+        0 existing in
+    let next_idx = max_idx + 1 in
+    Printf.sprintf "%s/%s%06d%s" dir_path prefix next_idx suffix
+  in
+  let write_json oc =
+    let subtract l1 l2 =
+      List.filter (fun itm -> not (List.mem itm l2)) l1 in
+    let string_of_asm_list l =
+      List.map (fun th -> "\"" ^ String.escaped (string_of_term (concl (snd th))) ^ "\"") l in
+    Printf.fprintf oc "[\n";
+    List.iteri (fun i entry ->
+        let sep = if i + 1 = List.length logs then "" else "," in
+        match entry with
+        | ExportTrace.TacticEntry { index; name; record = r; args = r_args } ->
+          Printf.fprintf oc "  {\n";
+          Printf.fprintf oc "    \"index\": %d,\n" index;
+          Printf.fprintf oc "    \"kind\": \"tactic\",\n";
+          Printf.fprintf oc "    \"name\": \"%s\",\n" (String.escaped name);
+          Printf.fprintf oc "    \"definition_line_number\": {\n";
+          Printf.fprintf oc "       \"file_path\": \"%s\",\n"
+            (String.escaped (fst r.definition_line_number));
+          Printf.fprintf oc "       \"line\": %d\n" (snd r.definition_line_number);
+          Printf.fprintf oc "    },\n";
+          Printf.fprintf oc "    \"user_line_number\": {\n";
+          Printf.fprintf oc "       \"file_path\": \"%s\",\n"
+            (String.escaped (fst r.user_line_number));
+          Printf.fprintf oc "       \"line\": %d\n" (snd r.user_line_number);
+          Printf.fprintf oc "    },\n";
+          Printf.fprintf oc "    \"arg_names\": [%s],\n"
+            (String.concat ", " (List.map (fun s -> "\"" ^ s ^ "\"") r_args.names));
+          Printf.fprintf oc "    \"arg_types\": [%s],\n"
+            (String.concat ", " (List.map (fun s -> "\"" ^ s ^ "\"") r_args.types));
+          Printf.fprintf oc "    \"arg_values\": [%s],\n"
+            (String.concat ", " (List.map (fun s -> "\"" ^ (String.escaped s) ^ "\"") r_args.values));
+          Printf.fprintf oc "    \"arg_exprs\": [%s],\n"
+            (String.concat ", " (List.map (fun s -> "\"" ^ (String.escaped s) ^ "\"") r_args.exprs));
+          Printf.fprintf oc "    \"goal_before\": \"%s\",\n"
+            (String.escaped (Format.asprintf "%a" pp_print_goal r.goal_before));
+          Printf.fprintf oc "    \"goals_after\": [%s],\n"
+            (String.concat ", " (List.map (fun g ->
+                "{\"goal\": \"" ^
+                String.escaped (Format.asprintf "%a" pp_print_goal g) ^
+                "\", \"added_assumptions\": [" ^
+                String.concat ","
+                  (string_of_asm_list (subtract (fst g) (fst r.goal_before))) ^
+                "], \"removed_assumptions\": [" ^
+                String.concat ","
+                  (string_of_asm_list (subtract (fst r.goal_before) (fst g))) ^
+                "]}")
+                r.goals_after));
+          Printf.fprintf oc "    \"num_subgoals\": %d\n" r.num_subgoals;
+          Printf.fprintf oc "  }%s\n" sep
+        | ExportTrace.ConversionEntry { index; name; record = r; args = r_args } ->
+          Printf.fprintf oc "  {\n";
+          Printf.fprintf oc "    \"index\": %d,\n" index;
+          Printf.fprintf oc "    \"kind\": \"conversion\",\n";
+          Printf.fprintf oc "    \"name\": \"%s\",\n" (String.escaped name);
+          Printf.fprintf oc "    \"definition_line_number\": {\n";
+          Printf.fprintf oc "       \"file_path\": \"%s\",\n"
+            (String.escaped (fst r.definition_line_number));
+          Printf.fprintf oc "       \"line\": %d\n" (snd r.definition_line_number);
+          Printf.fprintf oc "    },\n";
+          Printf.fprintf oc "    \"user_line_number\": {\n";
+          Printf.fprintf oc "       \"file_path\": \"%s\",\n"
+            (String.escaped (fst r.user_line_number));
+          Printf.fprintf oc "       \"line\": %d\n" (snd r.user_line_number);
+          Printf.fprintf oc "    },\n";
+          Printf.fprintf oc "    \"arg_names\": [%s],\n"
+            (String.concat ", " (List.map (fun s -> "\"" ^ s ^ "\"") r_args.names));
+          Printf.fprintf oc "    \"arg_types\": [%s],\n"
+            (String.concat ", " (List.map (fun s -> "\"" ^ s ^ "\"") r_args.types));
+          Printf.fprintf oc "    \"arg_values\": [%s],\n"
+            (String.concat ", " (List.map (fun s -> "\"" ^ (String.escaped s) ^ "\"") r_args.values));
+          Printf.fprintf oc "    \"arg_exprs\": [%s],\n"
+            (String.concat ", " (List.map (fun s -> "\"" ^ (String.escaped s) ^ "\"") r_args.exprs));
+          Printf.fprintf oc "    \"input\": \"%s\",\n"
+            (String.escaped (Format.asprintf "%a" pp_print_term r.input));
+          Printf.fprintf oc "    \"output\": \"%s\"\n"
+            (String.escaped (Format.asprintf "%a" pp_print_thm r.output));
+          Printf.fprintf oc "  }%s\n" sep)
+      logs;
+    Printf.fprintf oc "]\n"
+  in
   let oc = open_out path in
-  let subtract l1 l2 =
-    List.filter (fun itm -> not (List.mem itm l2)) l1 in
-  let string_of_asm_list l =
-    List.map (fun th -> "\"" ^ String.escaped (string_of_term (concl (snd th))) ^ "\"") l in
-  Printf.fprintf oc "[\n";
-  List.iteri (fun i entry ->
-      let sep = if i + 1 = List.length logs then "" else "," in
-      match entry with
-      | ExportTrace.TacticEntry { index; name; record = r; args = r_args } ->
-        Printf.fprintf oc "  {\n";
-        Printf.fprintf oc "    \"index\": %d,\n" index;
-        Printf.fprintf oc "    \"kind\": \"tactic\",\n";
-        Printf.fprintf oc "    \"name\": \"%s\",\n" (String.escaped name);
-        Printf.fprintf oc "    \"definition_line_number\": {\n";
-        Printf.fprintf oc "       \"file_path\": \"%s\",\n"
-          (String.escaped (fst r.definition_line_number));
-        Printf.fprintf oc "       \"line\": %d\n" (snd r.definition_line_number);
-        Printf.fprintf oc "    },\n";
-        Printf.fprintf oc "    \"user_line_number\": {\n";
-        Printf.fprintf oc "       \"file_path\": \"%s\",\n"
-          (String.escaped (fst r.user_line_number));
-        Printf.fprintf oc "       \"line\": %d\n" (snd r.user_line_number);
-        Printf.fprintf oc "    },\n";
-        Printf.fprintf oc "    \"arg_names\": [%s],\n"
-          (String.concat ", " (List.map (fun s -> "\"" ^ s ^ "\"") r_args.names));
-        Printf.fprintf oc "    \"arg_types\": [%s],\n"
-          (String.concat ", " (List.map (fun s -> "\"" ^ s ^ "\"") r_args.types));
-        Printf.fprintf oc "    \"arg_values\": [%s],\n"
-          (String.concat ", " (List.map (fun s -> "\"" ^ (String.escaped s) ^ "\"") r_args.values));
-        Printf.fprintf oc "    \"arg_exprs\": [%s],\n"
-          (String.concat ", " (List.map (fun s -> "\"" ^ (String.escaped s) ^ "\"") r_args.exprs));
-        Printf.fprintf oc "    \"goal_before\": \"%s\",\n"
-          (String.escaped (Format.asprintf "%a" pp_print_goal r.goal_before));
-        Printf.fprintf oc "    \"goals_after\": [%s],\n"
-          (String.concat ", " (List.map (fun g ->
-              "{\"goal\": \"" ^
-              String.escaped (Format.asprintf "%a" pp_print_goal g) ^
-              "\", \"added_assumptions\": [" ^
-              String.concat ","
-                (string_of_asm_list (subtract (fst g) (fst r.goal_before))) ^
-              "], \"removed_assumptions\": [" ^
-              String.concat ","
-                (string_of_asm_list (subtract (fst r.goal_before) (fst g))) ^
-              "]}")
-              r.goals_after));
-        Printf.fprintf oc "    \"num_subgoals\": %d\n" r.num_subgoals;
-        Printf.fprintf oc "  }%s\n" sep
-      | ExportTrace.ConversionEntry { index; name; record = r; args = r_args } ->
-        Printf.fprintf oc "  {\n";
-        Printf.fprintf oc "    \"index\": %d,\n" index;
-        Printf.fprintf oc "    \"kind\": \"conversion\",\n";
-        Printf.fprintf oc "    \"name\": \"%s\",\n" (String.escaped name);
-        Printf.fprintf oc "    \"definition_line_number\": {\n";
-        Printf.fprintf oc "       \"file_path\": \"%s\",\n"
-          (String.escaped (fst r.definition_line_number));
-        Printf.fprintf oc "       \"line\": %d\n" (snd r.definition_line_number);
-        Printf.fprintf oc "    },\n";
-        Printf.fprintf oc "    \"user_line_number\": {\n";
-        Printf.fprintf oc "       \"file_path\": \"%s\",\n"
-          (String.escaped (fst r.user_line_number));
-        Printf.fprintf oc "       \"line\": %d\n" (snd r.user_line_number);
-        Printf.fprintf oc "    },\n";
-        Printf.fprintf oc "    \"arg_names\": [%s],\n"
-          (String.concat ", " (List.map (fun s -> "\"" ^ s ^ "\"") r_args.names));
-        Printf.fprintf oc "    \"arg_types\": [%s],\n"
-          (String.concat ", " (List.map (fun s -> "\"" ^ s ^ "\"") r_args.types));
-        Printf.fprintf oc "    \"arg_values\": [%s],\n"
-          (String.concat ", " (List.map (fun s -> "\"" ^ (String.escaped s) ^ "\"") r_args.values));
-        Printf.fprintf oc "    \"arg_exprs\": [%s],\n"
-          (String.concat ", " (List.map (fun s -> "\"" ^ (String.escaped s) ^ "\"") r_args.exprs));
-        Printf.fprintf oc "    \"input\": \"%s\",\n"
-          (String.escaped (Format.asprintf "%a" pp_print_term r.input));
-        Printf.fprintf oc "    \"output\": \"%s\"\n"
-          (String.escaped (Format.asprintf "%a" pp_print_thm r.output));
-        Printf.fprintf oc "  }%s\n" sep)
-    logs;
-  Printf.fprintf oc "]\n";
-  Printf.printf "Dumped to %s\n" path;
-  close_out oc
+  write_json oc;
+  close_out oc;
+  let latest = dir_path ^ "/trace.json" in
+  let oc_latest = open_out latest in
+  write_json oc_latest;
+  close_out oc_latest;
+  Printf.printf "Dumped to %s\n" path
 
 let exptrace_dump (dir_path:string): unit =
   let effective_dir =
