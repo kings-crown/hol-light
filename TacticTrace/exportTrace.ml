@@ -1,5 +1,5 @@
 (* This file must be loaded inside HOL Light proof files *)
-
+(* Add typed goal serialization to exportTrace *)
 unset_jrh_lexer;;
 module ExportTrace = struct
   type tac_record = {
@@ -104,6 +104,48 @@ let sanitize_component (name:string): string =
   let sanitized = Buffer.contents buf in
   if sanitized = "" then "theorem" else sanitized
 
+let trace_type_printer_name = "TacticTrace.ShowTypes"
+
+let install_trace_type_printer (): unit =
+  let printer fmt tm =
+    let hop,args = strip_comb tm in
+    if is_var hop && args = [] then begin
+      Format.pp_print_string fmt "(";
+      Format.pp_print_string fmt (name_of hop);
+      Format.pp_print_string fmt ":";
+      pp_print_type fmt (type_of hop);
+      Format.pp_print_string fmt ")"
+    end else
+      raise (Failure trace_type_printer_name)
+  in
+  install_user_printer (trace_type_printer_name, printer)
+
+let remove_trace_type_printer (): unit =
+  try delete_user_printer trace_type_printer_name with Failure _ -> ()
+
+let with_typed_printers (thunk: unit -> 'a): 'a =
+  let old_pts = !print_types_of_subterms in
+  let installed = ref false in
+  let cleanup () =
+    if !installed then remove_trace_type_printer ();
+    print_types_of_subterms := old_pts
+  in
+  print_types_of_subterms := 2;
+  try
+    install_trace_type_printer (); installed := true;
+    Fun.protect ~finally:cleanup thunk
+  with exn ->
+    cleanup (); raise exn
+
+let render_goal goal =
+  with_typed_printers (fun () -> Format.asprintf "%a" pp_print_goal goal)
+
+let render_term term =
+  with_typed_printers (fun () -> Format.asprintf "%a" pp_print_term term)
+
+let render_thm thm =
+  with_typed_printers (fun () -> Format.asprintf "%a" pp_print_thm thm)
+
 let rec drop n lst =
   match n, lst with
   | 0, _ -> lst
@@ -141,12 +183,13 @@ let dump_logs_to_dir (dir_path:string) (logs:ExportTrace.log_entry list): unit =
     let subtract l1 l2 =
       List.filter (fun itm -> not (List.mem itm l2)) l1 in
     let string_of_asm_list l =
-      List.map (fun th -> "\"" ^ String.escaped (string_of_term (concl (snd th))) ^ "\"") l in
+      List.map (fun th -> "\"" ^ String.escaped (render_term (concl (snd th))) ^ "\"") l in
     Printf.fprintf oc "[\n";
     List.iteri (fun i entry ->
         let sep = if i + 1 = List.length logs then "" else "," in
         match entry with
         | ExportTrace.TacticEntry { index; name; record = r; args = r_args } ->
+          let goal_before_str = render_goal r.goal_before in
           Printf.fprintf oc "  {\n";
           Printf.fprintf oc "    \"index\": %d,\n" index;
           Printf.fprintf oc "    \"kind\": \"tactic\",\n";
@@ -170,11 +213,12 @@ let dump_logs_to_dir (dir_path:string) (logs:ExportTrace.log_entry list): unit =
           Printf.fprintf oc "    \"arg_exprs\": [%s],\n"
             (String.concat ", " (List.map (fun s -> "\"" ^ (String.escaped s) ^ "\"") r_args.exprs));
           Printf.fprintf oc "    \"goal_before\": \"%s\",\n"
-            (String.escaped (Format.asprintf "%a" pp_print_goal r.goal_before));
+            (String.escaped goal_before_str);
           Printf.fprintf oc "    \"goals_after\": [%s],\n"
             (String.concat ", " (List.map (fun g ->
+                let goal_str = render_goal g in
                 "{\"goal\": \"" ^
-                String.escaped (Format.asprintf "%a" pp_print_goal g) ^
+                String.escaped goal_str ^
                 "\", \"added_assumptions\": [" ^
                 String.concat ","
                   (string_of_asm_list (subtract (fst g) (fst r.goal_before))) ^
@@ -209,9 +253,9 @@ let dump_logs_to_dir (dir_path:string) (logs:ExportTrace.log_entry list): unit =
           Printf.fprintf oc "    \"arg_exprs\": [%s],\n"
             (String.concat ", " (List.map (fun s -> "\"" ^ (String.escaped s) ^ "\"") r_args.exprs));
           Printf.fprintf oc "    \"input\": \"%s\",\n"
-            (String.escaped (Format.asprintf "%a" pp_print_term r.input));
+            (String.escaped (render_term r.input));
           Printf.fprintf oc "    \"output\": \"%s\"\n"
-            (String.escaped (Format.asprintf "%a" pp_print_thm r.output));
+            (String.escaped (render_thm r.output));
           Printf.fprintf oc "  }%s\n" sep)
       logs;
     Printf.fprintf oc "]\n"
