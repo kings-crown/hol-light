@@ -933,9 +933,76 @@ let modify ml_path ast_path interface_path kernel_interface_path output_path =
         end)
       tac_users) in
 
+  let theorem_inserters:(Lexing.position * string) list =
+    let is_ident (e:expression) (ident:string) =
+      match e.pexp_desc with
+      | Pexp_ident { txt = Lident x; _ } -> x = ident
+      | _ -> false in
+
+    let inserters = ref [] in
+
+    let add_wrapper thm_name expr =
+      let src_file,_,_ = Location.get_pos_info expr.pexp_loc.loc_start in
+      let is_in_hol_light =
+        let needle = Filename.dir_sep ^ "hol-light" ^ Filename.dir_sep in
+        let needle_len = String.length needle in
+        let slen = String.length src_file in
+        let rec aux idx =
+          if idx + needle_len > slen then false
+          else if String.sub src_file idx needle_len = needle then true
+          else aux (idx + 1)
+        in
+        aux 0
+      in
+      let should_wrap = not is_in_hol_light in
+      if should_wrap then begin
+        let source = String.trim (get_source expr.pexp_loc srclines) in
+        let already_wrapped =
+          String.starts_with ~prefix:"exptrace_with_theorem" source ||
+          String.starts_with ~prefix:"ExportTrace.with_theorem" source in
+        if not already_wrapped then begin
+          inserters := (expr.pexp_loc.loc_end, ")") :: !inserters;
+          inserters :=
+            (expr.pexp_loc.loc_start,
+             "exptrace_with_theorem \"" ^ String.escaped thm_name ^ "\" (fun () -> ")
+            :: !inserters
+        end
+      end in
+
+    List.iter (fun (item:structure_item) ->
+      match item.pstr_desc with
+      | Pstr_value (_, bindings) ->
+          List.iter (fun (binding:value_binding) ->
+            match binding.pvb_pat.ppat_desc with
+            | Ppat_var { txt = thm_name; _ } -> begin
+                let expr = binding.pvb_expr in
+                let register () = add_wrapper thm_name expr in
+                match expr.pexp_desc with
+                | Pexp_apply (prove_fn, [Nolabel, prove_args])
+                    when is_ident prove_fn "prove" -> begin
+                      match prove_args.pexp_desc with
+                      | Pexp_tuple [_goal_term; _proof_term] -> register ()
+                      | _ -> ()
+                    end
+                | Pexp_apply (time_fn, [Nolabel, prove_fn; Nolabel, prove_args])
+                    when is_ident time_fn "time" && is_ident prove_fn "prove" -> begin
+                      match prove_args.pexp_desc with
+                      | Pexp_tuple [_goal_term; _proof_term] -> register ()
+                      | _ -> ()
+                    end
+                | _ -> ()
+              end
+            | _ -> ())
+            bindings
+      | _ -> ())
+      ast;
+
+    !inserters
+  in
+
   (* Now merge the 'updates' and sort by their insertion points
      (in decreasing order) *)
-  let inserters = tac_wrapper_inserters @ tac_users_inserters in
+  let inserters = tac_wrapper_inserters @ tac_users_inserters @ theorem_inserters in
   let loc_comp ((loc1,_):Lexing.position*string) ((loc2,_):Lexing.position*string): int =
     let f1,l1,c1 = Location.get_pos_info loc1 in
     let f2,l2,c2 = Location.get_pos_info loc2 in
@@ -1085,4 +1152,3 @@ let () =
       collect_toplevel_thms (Sys.argv.(2)) (Sys.argv.(3))
     else print_help()
   | _ -> (print_help(); failwith "Unknown option")
-
