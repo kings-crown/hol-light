@@ -442,7 +442,7 @@ let rec to_n_elems (r:string list) n:string list =
   | [] -> replicate "(unknown)" n;;
 
 let () =
-  exptrace_set_max_bytes (Some (50 * 1024 * 1024));
+  exptrace_set_max_bytes (Some (75 * 1024 * 1024));
   match Sys.getenv_opt "TRACE_MAX_BYTES" with
   | Some raw ->
     begin match int_of_string_opt (String.trim raw) with
