@@ -853,7 +853,7 @@ let make_wrappers ast types (linenum_maps: ((int * string) option) array)
          s := !s ^ "      " ^
            (String.concat ";\n        "
              (List.map (fun (argty, argname, prefix) ->
-               OcamlTypes.get_structifier (prefix = \"?\") argty argname) !args)) ^ "\n";
+               OcamlTypes.get_structifier (prefix = "?") argty argname) !args)) ^ "\n";
          s := !s ^ "      ];\n"
         ));
         s := !s ^ "  });\n";
