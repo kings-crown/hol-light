@@ -303,9 +303,21 @@ let dump_logs_to_dir ?theorem_name (dir_path:string) (logs:ExportTrace.log_entry
           write (Printf.sprintf "    \"arg_values\": [%s],\n"
                    (String.concat ", "
                       (List.map (fun s -> "\"" ^ String.escaped s ^ "\"") r_args.values)));
+          (* If the source expression is a placeholder like [th]/th/(unknown),
+             fall back to the rendered arg_value so downstream consumers receive
+             the actual theorem text. *)
+          let patched_exprs =
+            List.map2
+              (fun expr value ->
+                 let e = String.trim expr in
+                 match e with
+                 | "th" | "[th]" | "(unknown)" -> value
+                 | _ -> expr)
+              r_args.exprs r_args.values
+          in
           write (Printf.sprintf "    \"arg_exprs\": [%s],\n"
                    (String.concat ", "
-                      (List.map (fun s -> "\"" ^ String.escaped s ^ "\"") r_args.exprs)));
+                      (List.map (fun s -> "\"" ^ String.escaped s ^ "\"") patched_exprs)));
           write (Printf.sprintf "    \"goal_before\": \"%s\",\n"
                    (String.escaped goal_before_str));
           write (Printf.sprintf "    \"goals_after\": [%s],\n" goals_after_str);
