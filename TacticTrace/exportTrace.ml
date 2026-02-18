@@ -23,6 +23,10 @@ module ExportTrace = struct
     types: string list;
     values: string list;
     exprs: string list;
+    (* JSON-ish structural encodings of theorem arguments. For non-theorem
+       arguments the entry is "". For thm it is {"assumptions":[...],"conclusion":"..."}.
+       For thm list it is a JSON array of such objects. *)
+    thm_structs: string list;
   }
 
   (***************************************************************************)
@@ -210,6 +214,19 @@ let render_term term =
 let render_thm thm =
   with_typed_printers (fun () -> Format.asprintf "%a" pp_print_thm thm)
 
+(* Structured (JSON) encoding of a theorem: assumptions + conclusion rendered
+   with types so we can reconstruct the value during replay. *)
+let render_thm_struct thm =
+  let asms, concl = dest_thm thm in
+  let asm_json =
+    String.concat ", "
+      (List.map (fun t -> "\"" ^ String.escaped (render_term t) ^ "\"") asms) in
+  "{ \"assumptions\": [" ^ asm_json ^ "], \"conclusion\": \"" ^
+  String.escaped (render_term concl) ^ "\" }"
+
+let render_thm_struct_list thms =
+  "[" ^ (String.concat ", " (List.map render_thm_struct thms)) ^ "]"
+
 let rec drop n lst =
   match n, lst with
   | 0, _ -> lst
@@ -318,6 +335,10 @@ let dump_logs_to_dir ?theorem_name (dir_path:string) (logs:ExportTrace.log_entry
           write (Printf.sprintf "    \"arg_exprs\": [%s],\n"
                    (String.concat ", "
                       (List.map (fun s -> "\"" ^ String.escaped s ^ "\"") patched_exprs)));
+          write (Printf.sprintf "    \"arg_thm_structs\": [%s],\n"
+                   (String.concat ", "
+                      (List.map (fun s -> "\"" ^ String.escaped s ^ "\"")
+                         r_args.thm_structs)));
           write (Printf.sprintf "    \"goal_before\": \"%s\",\n"
                    (String.escaped goal_before_str));
           write (Printf.sprintf "    \"goals_after\": [%s],\n" goals_after_str);
@@ -350,6 +371,10 @@ let dump_logs_to_dir ?theorem_name (dir_path:string) (logs:ExportTrace.log_entry
           write (Printf.sprintf "    \"arg_exprs\": [%s],\n"
                    (String.concat ", "
                       (List.map (fun s -> "\"" ^ String.escaped s ^ "\"") r_args.exprs)));
+          write (Printf.sprintf "    \"arg_thm_structs\": [%s],\n"
+                   (String.concat ", "
+                      (List.map (fun s -> "\"" ^ String.escaped s ^ "\"")
+                         r_args.thm_structs)));
           write (Printf.sprintf "    \"input\": \"%s\",\n"
                    (String.escaped input_str));
           write (Printf.sprintf "    \"output\": \"%s\"\n"

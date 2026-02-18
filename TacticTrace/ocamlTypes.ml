@@ -147,3 +147,19 @@ let rec get_stringifier (optional:bool) (ty:typ) (argname:string)
       "(match (" ^ argname ^ ") with | None -> \"None\" | Some optval -> ("
         ^ (get_stringifier false subty "optval") ^ "))"
     | _ -> {|"(don't know how to express)"|}
+
+(* Structured (JSON) encoding for theorem arguments, used when the textual
+   source expression is missing. Non-theorem types return an empty string. *)
+let rec get_structifier (optional:bool) (ty:typ) (argname:string)
+    : string =
+  if optional then
+    get_structifier false (TyApp { args = [ty]; destty = TyConst "option" })
+        argname
+  else
+    match ty with
+    | TyConst "thm" -> "render_thm_struct " ^ argname
+    | TyApp { args = [subty]; destty = TyConst "list" } ->
+        (match subty with
+         | TyConst "thm" -> "render_thm_struct_list " ^ argname
+         | _ -> "\"\"")
+    | _ -> "\"\""

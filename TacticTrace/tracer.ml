@@ -785,6 +785,16 @@ let make_wrappers ast types (linenum_maps: ((int * string) option) array)
         s := !s ^ "      exprs = to_n_elems\n";
         s := !s ^ "         (match args_str with | Some s -> s  | None -> [])\n";
         s := !s ^ "         " ^ (string_of_int numargs) ^ ";\n";
+        (if numargs = 0 then
+           s := !s ^ "      thm_structs = [];\n"
+         else (
+           s := !s ^ "      thm_structs = [\n";
+           s := !s ^ "        " ^
+             (String.concat ";\n        "
+                (List.map (fun (argty, argname, prefix) ->
+                   OcamlTypes.get_structifier (prefix = "?") argty argname) !args)) ^ "\n";
+           s := !s ^ "      ];\n"
+         ));
         s := !s ^ "    });\n";
 
         s := !s ^ "    (trace_ga_inst,trace_goals_after,trace_justf)\n";
@@ -836,6 +846,16 @@ let make_wrappers ast types (linenum_maps: ((int * string) option) array)
         s := !s ^ "    exprs = to_n_elems\n";
         s := !s ^ "       (match args_str with | Some s -> s  | None -> [])\n";
         s := !s ^ "       " ^ (string_of_int numargs) ^ ";\n";
+        (if numargs = 0 then
+         s := !s ^ "    thm_structs = [];\n"
+        else (
+         s := !s ^ "    thm_structs = [\n";
+         s := !s ^ "      " ^
+           (String.concat ";\n        "
+             (List.map (fun (argty, argname, prefix) ->
+               OcamlTypes.get_structifier (prefix = \"?\") argty argname) !args)) ^ "\n";
+         s := !s ^ "      ];\n"
+        ));
         s := !s ^ "  });\n";
 
         s := !s ^ "  thm_output\n";
