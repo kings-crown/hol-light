@@ -8,6 +8,190 @@
   * page: https://github.com/jrh13/hol-light/commits/master         *
   * *****************************************************************
 
+Sat 21st Feb 2026       100/cubedissection.ml [new file]
+
+Added a formalization of the impossibility of cube dissection into finitely
+many smaller cubes of pairwise distinct sizes ("cubing the cube"), originally
+proved by R. L. Brooks, C. A. B. Smith, A. H. Stone and W. T. Tutte, "The
+Dissection of Rectangles into Squares", Duke Mathematical Journal, vol. 7
+(1940), pp. 312-340. The proof follows the elegant argument presented in J. E.
+Littlewood, "A Mathematician's Miscellany" (CUP, 1953), revised edition
+"Littlewood's Miscellany" (ed. B. Bollobas, CUP, 1986), pp. 28-29 and the HOL
+Light formalization was almost entirely written by Claude Code (Opus 4.6).
+
+Thu 19th Feb 2026       Multivariate/metric.ml
+
+Added some basic definitions and theorems about the Cantor space. The
+basic definition is as the product space (:num->bool), and this is
+then shown to be homeomorphic to its realization as the usual Cantor
+"excluded thirds" subset of [0,1]. New definitions:
+
+        cantor_map
+        cantor_set
+        cantor_space
+        cantor_term
+        tendsto_real_def
+
+and theorems:
+
+        CANTOR_MAP_CLOSED_IMAGE
+        CANTOR_MAP_CLOSED_IN_INTERVAL
+        CANTOR_MAP_CONTINUOUS
+        CANTOR_MAP_EMBEDDING
+        CANTOR_MAP_GE_PARTIAL_SUM
+        CANTOR_MAP_IMAGE_SUBSET_INTERVAL
+        CANTOR_MAP_INJECTIVE
+        CANTOR_MAP_LE_ONE
+        CANTOR_MAP_PARTIAL_SUM_BOUND
+        CANTOR_MAP_POS
+        CANTOR_MAP_RANGE
+        CANTOR_MAP_STRICT_LT
+        CANTOR_MAP_SUMMABLE
+        CANTOR_MAP_SUMS
+        CANTOR_PARTIAL_SUM_DIFF_AT_K
+        CANTOR_PARTIAL_SUM_MONO
+        CANTOR_SET_SUBSET_INTERVAL
+        CANTOR_SPACE_HOMEOMORPHIC_CANTOR_SET
+        CANTOR_TERM_BOUND
+        CANTOR_TERM_CONTINUOUS
+        CANTOR_TERM_POS
+        CLOSED_IN_CANTOR_SET
+        CLOSED_IN_CANTOR_SET_INTERVAL
+        COMPACT_SPACE_CANTOR_SPACE
+        HAUSDORFF_SPACE_CANTOR_SPACE
+        METRIZABLE_SPACE_CANTOR_SPACE
+        NONEMPTY_TOPSPACE_CANTOR_SPACE
+        PERFECT_CANTOR_SPACE
+        PERFECT_CANTOR_SPACE_EQ
+        SUM_TWOTHIRDS
+        TENDSTO_REAL_EPS_DELTA
+        TOPSPACE_CANTOR_SPACE
+        TWOTHIRDS_SUMS
+        ZERO_DIMENSIONAL_CANTOR_SPACE
+
+The new definition "tendsto_real_def" is just a more basic definition of
+the usual notion of the sum of a real series, so that it can be used in
+the general topology theories without the artificially circuitous
+derivation via real^N. The former definition "tendsto_real" is now a
+derived theorem rather than a definition, but is equivalent.
+
+Thu 19th Feb 2026       Multivariate/metric.ml, Multivariate/topology.ml, Multivariate/paths.ml
+
+Added general metric space versions of well-chainedness, connectedness
+of chains, and the two uniform variants of local connectedness (ULC =
+uniformly locally connected and FCCOVERABLE = fine connected coverable,
+a.k.a. Whyburn's "Property S"), together with key results connecting
+them to local connectedness and compactness. The Euclidean special cases
+in paths.ml and topology.ml are then derived from the general versions.
+New definitions:
+
+        fccoverable_in
+        fccoverable_space
+        ulc_space
+
+and new theorems:
+
+        COMPACT_IN_LOCALLY_CONNECTED_EQ_FCCOVERABLE_SPACE
+        COMPACT_IN_LOCALLY_CONNECTED_IMP_FCCOVERABLE_SPACE
+        COMPACT_IN_LOCALLY_CONNECTED_IMP_ULC_SPACE
+        COMPACT_IN_LOCALLY_CONNECTED_IMP_ULC_SPACE_ALT
+        CONNECTED_COMPONENT_OF_EQ_WELLCHAINED
+        CONNECTED_COMPONENT_OF_IMP_WELLCHAINED
+        CONNECTED_EQ_WELLCHAINED_IN
+        CONNECTED_IN_CHAIN
+        CONNECTED_IN_CHAIN_GEN
+        CONNECTED_IN_IFF_CONNECTED_COMPONENT_OF
+        CONNECTED_IN_IMP_WELLCHAINED
+        CONNECTED_IN_NEST
+        CONNECTED_IN_NEST_GEN
+        CONNECTED_IN_UNIONS_STRONG
+        EPSILON_ABSORBING_IMP_CLOPEN
+        FCCOVERABLE_IN_IMP_FCCOVERABLE_SPACE_SUBMETRIC
+        FCCOVERABLE_IN_IMP_LOCALLY_CONNECTED_SPACE
+        FCCOVERABLE_SPACE_EQ_FCCOVERABLE_IN_MSPACE
+        FCCOVERABLE_SPACE_IMP_LOCALLY_CONNECTED_SPACE
+        FCCOVERABLE_SPACE_INTERMEDIATE_CLOSURE
+        IN_CLOSURE_OF_IMP_SUBSET_MCBALL
+        MBALL_INTER_DSEPARATED_SINGLETON
+        MDIAMETER_SUBSET_MBALL
+        MDIAMETER_SUBMETRIC
+        MDIST_TRIANGLE_LT
+        NESTED_COMPACT_APPROX
+        TOTALLY_BOUNDED_IMP_DISCRETE_FINITE
+        TOTALLY_BOUNDED_ULC_SPACE_IMP_FCCOVERABLE_SPACE
+        ULC_SPACE_IMP_LOCALLY_CONNECTED_SPACE
+        WELLCHAINED_ELEMENTS
+        WELLCHAINED_INTERS
+        WELLCHAINED_SETS
+
+In Multivariate/topology.ml, the theorems CONNECTED_CHAIN,
+CONNECTED_CHAIN_GEN, CONNECTED_NEST and CONNECTED_NEST_GEN are
+rederived from their general topological counterparts. All theorem
+statements are preserved.
+
+In Multivariate/paths.ml, the Euclidean-specific theorems about ULC and
+FCCOVERABLE (FCCOVERABLE_IMP_LOCALLY_CONNECTED through
+COMPACT_LOCALLY_CONNECTED_EQ_FCCCOVERABLE) are rederived from the
+general metric space versions via a set of bridge lemmas connecting
+submetric euclidean_metric to the Euclidean topology. The well-chained
+theorems (CONNECTED_IMP_WELLCHAINED through
+CONNECTED_COMPONENT_EQ_WELLCHAINED) are similarly rederived. All theorem
+statements are preserved.
+
+Incompatible changes: In paths.ml, three Euclidean-specific theorems
+have been renamed with a _EUCLIDEAN suffix to avoid clashing with the
+new general versions in metric.ml that take the same names:
+
+        WELLCHAINED_ELEMENTS  -> WELLCHAINED_ELEMENTS_EUCLIDEAN
+        WELLCHAINED_SETS      -> WELLCHAINED_SETS_EUCLIDEAN
+        WELLCHAINED_INTERS    -> WELLCHAINED_INTERS_EUCLIDEAN
+
+These were not used outside their original block so the renaming
+should not affect other files. Several new Euclidean bridge lemmas are
+introduced in paths.ml (SUBMETRIC_EUCLIDEAN_METRIC,
+MTOPOLOGY_SUBMETRIC_EUCLIDEAN, MBOUNDED_SUBMETRIC_EUCLIDEAN,
+MDIAMETER_SUBMETRIC_EUCLIDEAN, and others) to support the derivations.
+
+The statements and proofs were almost entirely written by Claude Code
+(Opus 4.6).
+
+Thu 19th Feb 2026       Library/ringtheory.ml, Library/rabin_test.ml [new file]
+
+Added a proof of Rabin's test for irreducibility of polynomials over
+finite fields. The development, both statements and proofs, was
+entirely written by Claude Code (Opus 4.6, running on AWS Bedrock). A
+few lemmas have been slightly tweaked manually and placed in the ring
+theory file, since they seem more broadly applicable:
+
+        POLY_DEG_1_IMP_IRREDUCIBLE
+        POLY_DEG_EQ_0_UNIT
+        POLY_DEG_UNIT
+        RING_DIVIDES_SUB_POW
+        RING_PRODUCT_CONST
+        RING_PRODUCT_LMUL
+        RING_SUB_TELESCOPE
+
+These are the theorems in the main Library/rabin_test.ml file
+culminating in RABIN_IRREDUCIBILITY_TEST:
+
+        FIELD_NONZERO_PRODUCT_PERMUTE
+        FIELD_ROOTS_BOUND
+        FINITE_FIELD_ELEMENT_POW
+        FINITE_FIELD_POW_ITERATE
+        ING_DIVIDES_POW_ITERATE
+        IRREDUCIBLE_DIVIDES_DEGREE
+        IRREDUCIBLE_DIVIDES_DEGREE_BOUND
+        IRREDUCIBLE_DIVIDES_XQ_MINUS_X
+        IRREDUCIBLE_DIVIDES_XQ_MINUS_X_GEN
+        IRRED_DIVIDES_POLY_EVAL_MINUS
+        POLY_NONUNIT_DEGREE_GE_1
+        QUOTIENT_POLY_RING_FINITE_CARD
+        RABIN_IRREDUCIBILITY_NECESSARY
+        RABIN_IRREDUCIBILITY_SUFFICIENT
+        RABIN_IRREDUCIBILITY_TEST
+        RING_DIVIDES_REDUCE
+        RING_ENDOMORPHISM_FROBENIUS_ITERATE
+
 Sun 15th Feb 2026       Multivariate/metric.ml, Multivariate/topology.ml, Multivariate/paracompact.ml [new file]
 
 Added a definition of paracompactness to the core general topology theory in

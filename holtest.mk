@@ -57,6 +57,7 @@ STANDALONE_EXAMPLES:=\
 	Examples/prover9 \
 	Examples/pseudoprime \
 	Library/q \
+	Library/rabin_test \
 	Examples/rectypes \
 	Library/ringtheory \
 	Examples/safetyliveness \
@@ -134,6 +135,7 @@ GREAT_100_THEOREMS:= \
 	100/combinations \
 	100/constructible \
 	100/cosine \
+	100/cubedissection \
 	100/cubic \
 	100/derangements \
 	100/desargues \
