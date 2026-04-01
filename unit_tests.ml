@@ -200,6 +200,16 @@ assert (pow (num 1 // num 2) (-3) = num 8);;
 assert (pow (num 1 // num 2) (-4) = num 16);;
 assert (pow (num 1 // num 2) 0 = num 1);;
 
+(* ------------------------------------------------------------------------- *)
+(* Test UNIFY_REFL_TAC.                                                      *)
+(* ------------------------------------------------------------------------- *)
+
+let UNIFY_REFL_TAC_TEST = prove(`?x. 1 = x`, META_EXISTS_TAC THEN UNIFY_REFL_TAC);;
+let UNIFY_REFL_TAC_TEST2 = prove(`?f. y + z = f y z`,
+                META_EXISTS_TAC THEN UNIFY_REFL_TAC);;
+let UNIFY_REFL_TAC_TEST3 = prove(`?f. y + 1 = f y 0`,
+                META_EXISTS_TAC THEN UNIFY_REFL_TAC);;
+
 
 (* ------------------------------------------------------------------------- *)
 (* Test pa_j preprocessor.                                                   *)
@@ -213,6 +223,58 @@ let test_fn = function
   | Unix.ADDR_INET _ -> ();;
 
 set_jrh_lexer;;
+
+(* ------------------------------------------------------------------------- *)
+(* Test record types (Library/components.ml and Library/records.ml).          *)
+(* ------------------------------------------------------------------------- *)
+
+needs "Library/records.ml";;
+
+let point_INDUCT,point_RECURSION,point_COMPONENTS =
+  define_auto_record_type
+   "test_point = { xcoord: num; ycoord: num }";;
+
+(* Check that the induction, recursion and component theorems exist *)
+let _ = concl point_INDUCT;;
+let _ = concl point_RECURSION;;
+let _ = concl point_COMPONENTS;;
+
+(* Check that read/write theorems were generated *)
+assert (length (get_record_components point_COMPONENTS) = 2);;
+
+(* Check read-write laws *)
+let rw_thms = record_read_write_thms (point_INDUCT, point_COMPONENTS);;
+assert (length rw_thms = 2);;
+
+(* Check strongly_valid_component theorems *)
+let sv_thms =
+  record_strongly_valid_component_thms (point_INDUCT, point_COMPONENTS);;
+assert (length sv_thms = 2);;
+
+(* Check orthogonality theorems (2 fields => 2 ordered pairs) *)
+let orth_thms = record_orthogonality_thms (point_INDUCT, point_COMPONENTS);;
+assert (length orth_thms = 2);;
+
+(* Prove: writing xcoord updates it correctly *)
+let XCOORD_READ_WRITE = prove
+ (`!x s:test_point. read xcoord (write xcoord x s) = x`,
+  GEN_TAC THEN MATCH_MP_TAC point_INDUCT THEN
+  REWRITE_TAC[point_COMPONENTS]);;
+
+(* Prove: writing xcoord leaves ycoord intact *)
+let YCOORD_INTACT = prove
+ (`!x s:test_point. read ycoord (write xcoord x s) = read ycoord s`,
+  GEN_TAC THEN MATCH_MP_TAC point_INDUCT THEN
+  REWRITE_TAC[point_COMPONENTS]);;
+
+(* Test a record with 3 fields *)
+let triple_INDUCT,triple_RECURSION,triple_COMPONENTS =
+  define_auto_record_type
+   "test_triple = { first: num; second: bool; third: num }";;
+
+assert (length (get_record_components triple_COMPONENTS) = 3);;
+assert (length (record_orthogonality_thms
+                  (triple_INDUCT, triple_COMPONENTS)) = 6);;
 
 (* ------------------------------------------------------------------------- *)
 (* Test check_axioms.                                                        *)

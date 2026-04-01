@@ -57,6 +57,7 @@ STANDALONE_EXAMPLES:=\
 	Examples/prover9 \
 	Examples/pseudoprime \
 	Library/q \
+	Library/rabin_test \
 	Examples/rectypes \
 	Library/ringtheory \
 	Examples/safetyliveness \
@@ -96,6 +97,7 @@ EXTENDED_EXAMPLES:=\
 	Multivariate/make_complex \
 	Ntrie/ntrie \
 	Permutation/make \
+	Probability/make \
 	QBF/make \
 	Quaternions/make \
 	RichterHilbertAxiomGeometry/miz3/make \
@@ -110,6 +112,7 @@ EXTENDED_EXAMPLES:=\
 	Multivariate/homology \
 	Multivariate/lpspaces \
 	Multivariate/msum \
+	Multivariate/paracompact \
 	Multivariate/specialtopologies \
 	Multivariate/tarski \
 	RichterHilbertAxiomGeometry/Topology \
@@ -125,6 +128,7 @@ GREAT_100_THEOREMS:= \
 	100/bernoulli \
 	100/bertrand-primerecip \
 	100/birthday \
+	100/buffon \
 	100/cantor \
 	100/cayley_hamilton \
 	100/ceva \
@@ -133,6 +137,7 @@ GREAT_100_THEOREMS:= \
 	100/combinations \
 	100/constructible \
 	100/cosine \
+	100/cubedissection \
 	100/cubic \
 	100/derangements \
 	100/desargues \
