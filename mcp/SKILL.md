@@ -12,14 +12,18 @@ HOL Light is a classical higher-order logic theorem prover. The law of excluded 
 
 ## Proof workflow
 
+**One-shot proofs:** If you know the full tactic, use **prove**(goal, tactic) to get the theorem in a single call.
+
+**Interactive proofs:**
 1. **set_goal** — state the theorem to prove
 2. **goal_state** — inspect current goals (check hypotheses and conclusion)
 3. **search_theorems** — find relevant lemmas by name substring
 4. **apply_tactic** — apply a tactic; check response for `"proved":true`
-5. **backtrack** — undo if a tactic made things worse
-6. Repeat 2–5 until proved
-7. **hol_status** — check if HOL Light is alive (useful for debugging)
-8. **hol_restart** — restart HOL Light if it has died or is in a bad state
+5. **apply_tactics** — apply multiple tactics in one round-trip (faster for straightforward sequences)
+6. **backtrack** — undo if a tactic made things worse
+7. Repeat 2–6 until proved
+8. **hol_status** — check if HOL Light is alive (useful for debugging)
+9. **hol_restart** — restart HOL Light if it has died or is in a bad state
 
 Always read the goal state carefully before choosing a tactic. The structured JSON tells you exactly what hypotheses you have and what you need to show.
 
@@ -43,15 +47,17 @@ Always read the goal state carefully before choosing a tactic. The structured JS
 |--------|----------|
 | `REWRITE_TAC[thm1; thm2]` | Rewrite goal using equations (left-to-right) |
 | `ASM_REWRITE_TAC[thms]` | Rewrite using hypotheses AND given theorems |
-| `ONCE_REWRITE_TAC[thm]` | Rewrite only once (avoids looping) |
+| `ONCE_REWRITE_TAC[thm]` | Rewrite one pass, all topmost matches (not just one match!) |
 | `GEN_REWRITE_TAC I [thm]` | Rewrite at top level only |
+| `GEN_REWRITE_TAC (RAND_CONV) [thm]` | Rewrite only the operand of the top-level application |
+| `GEN_REWRITE_TAC (LAND_CONV o ONCE_DEPTH_CONV) [thm]` | Rewrite inside the LHS of a binary operator |
 | `SIMP_TAC[thms]` | Conditional rewriting (handles side conditions) |
 | `ASM_SIMP_TAC[thms]` | Conditional rewriting with hypotheses |
 
 ### Automation
 | Tactic | Solves |
 |--------|--------|
-| `ARITH_TAC` | Linear arithmetic over naturals and integers |
+| `ARITH_TAC` | Linear arithmetic over naturals and integers (goal only, ignores hypotheses) |
 | `REAL_ARITH_TAC` | Linear arithmetic over reals |
 | `MESON_TAC[thms]` | First-order logic with given lemmas |
 | `ASM_MESON_TAC[thms]` | First-order logic with hypotheses + lemmas |
@@ -76,6 +82,11 @@ Always read the goal state carefully before choosing a tactic. The structured JS
 | `FIRST_ASSUM MATCH_MP_TAC` | Same but keeps the hypothesis |
 | `UNDISCH_TAC \`term\`` | Move a hypothesis back to the goal as antecedent |
 | `SUBGOAL_THEN \`P\` ASSUME_TAC` | Assert and prove an intermediate fact |
+| `SUBGOAL_THEN \`P\` MP_TAC` | Assert, prove, and add as antecedent of goal |
+| `SUBGOAL_THEN \`P\` SUBST1_TAC` | Assert, prove, and substitute the equality in goal |
+| `SUBGOAL_THEN \`P\` STRIP_ASSUME_TAC` | Assert, prove, and split conjunctions into separate assumptions |
+| `ABBREV_TAC \`x = expr\`` | Replace `expr` with `x` in goal, add `expr = x` as assumption |
+| `EXPAND_TAC "x"` | Expand an abbreviation introduced by `ABBREV_TAC` |
 
 ### Combinators
 | Combinator | Meaning |
@@ -138,8 +149,12 @@ apply_tactic  "SUBGOAL_THEN `intermediate_fact` ASSUME_TAC"
 ## Pitfalls
 
 - **`REWRITE_TAC[GSYM thm]` can loop.** Use `ONCE_REWRITE_TAC[GSYM thm]` instead.
+- **`ONCE_REWRITE_TAC` rewrites ALL topmost matches, not just one.** If the goal has `f a b` and `f c d`, and the theorem matches `f x y`, both get rewritten in one pass. For targeted single-occurrence rewriting, use `GEN_REWRITE_TAC` with conversionals like `RAND_CONV`, `LAND_CONV`.
 - **`FIRST_X_ASSUM` consumes the hypothesis.** Use `FIRST_ASSUM` when you need to reuse it.
+- **`ARITH_TAC` ignores hypotheses.** Use `UNDISCH_TAC \`needed_fact\`` to bring assumptions into the goal first. `ASM_ARITH_TAC` uses hypotheses but can hang with many `val(...)` terms.
 - **`ASM_ARITH_TAC` hangs with many assumptions.** Discard irrelevant ones first with `REPEAT (FIRST_X_ASSUM (K ALL_TAC))` or targeted `UNDISCH_TAC` + `DISCH_TAC`.
+- **`SUBST1_TAC` silently succeeds even when the LHS doesn't appear in the goal.** It just does nothing. This makes `FIRST_ASSUM(fun th -> SUBST1_TAC(SYM th))` unreliable — it picks the first assumption where the tactic "succeeds" (which is all of them). Use `EXPAND_TAC "name"` to expand abbreviations instead.
+- **`THEN` vs `THENL` after `SUBGOAL_THEN ... SUBST1_TAC`.** `THEN` applies the proof to ALL subgoals (both the equality proof and the main goal). Use `THENL [equality_proof; ALL_TAC]` to target only the first subgoal.
 - **`WORD_RULE` hangs on `val(word(...))`.** Normalize via `VAL_WORD_EQ` first.
 - **Natural number subtraction is truncating.** `n - m = 0` when `m >= n`. Use `ARITH_TAC` for goals involving subtraction.
 - **`*` is right-associative for `num`.** Use explicit parentheses to avoid surprises.
@@ -168,6 +183,15 @@ ARM_STEPS_TAC EXEC (1--n) THEN
 ENSURES_FINAL_STATE_TAC THEN ASM_REWRITE_TAC[] THEN
 CONV_TAC WORD_RULE
 ```
+
+## Utility tools
+
+- **hol_type** — get the type of a HOL Light term (e.g., `hol_type` with term `` `1 + 1` `` returns `num`)
+- **hol_load** — load a HOL Light file via `needs` (e.g., `hol_load` with file `"Library/words.ml"`)
+- **hol_interrupt** — send SIGINT to cancel a hung tactic (e.g., when `MESON_TAC` diverges)
+- **hol_help** — return this tactic reference (SKILL.md). Call before your first proof.
+- **start_recording** — record all tactic applications to a JSONL file for later replay
+- **stop_recording** — stop recording and return the file path
 
 ## General advice
 
