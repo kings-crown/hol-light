@@ -2,7 +2,6 @@
 """MCP server for HOL Light theorem prover."""
 
 import os
-import queue
 import re
 import subprocess
 import sys
@@ -34,14 +33,13 @@ def _load_config():
                 break
     if config_path and os.path.isfile(config_path):
         with open(config_path, "rb") as f:
-            return tomllib.load(f), os.path.abspath(config_path)
-    return {}, None
+            return tomllib.load(f)
+    return {}
 
 
-_config, CONFIG_PATH = _load_config()
+_config = _load_config()
 TIMEOUT = _config.get("timeout", int(os.environ.get("HOL_TIMEOUT", "600")))
-CHECKPOINT_NAME = _config.get("checkpoint", os.environ.get("HOL_CHECKPOINT", "base"))
-MAX_OUTPUT_CHARS = _config.get("max_output_chars", int(os.environ.get("HOL_MAX_OUTPUT", "4000")))
+CHECKPOINT_NAME = _config.get("checkpoint", os.environ.get("HOL_CHECKPOINT", "noledit"))
 
 from mcp.server.fastmcp import FastMCP
 mcp = FastMCP("hol-light",
@@ -57,38 +55,14 @@ def _read_skill():
 
 _proc = None
 _lock = threading.Lock()
+_output_buf = []
 _helpers_loaded = False
 _start_time = None
 
-# Proof recording state
-_recording_path = None  # path to JSONL file; None = not recording
-_recording = []         # list of {"action": "tactic", "tactic": ..., "total_goals": ...}
-
-# Auto-recording: if recording_dir is set in config or env, enable recording at startup.
-_auto_record_dir = _config.get("recording_dir") or os.environ.get("HOL_RECORDING_DIR")
-if _auto_record_dir:
-    _auto_record_dir = os.path.abspath(_auto_record_dir)
-    os.makedirs(_auto_record_dir, exist_ok=True)
-    _recording_path = os.path.join(_auto_record_dir, "recording.jsonl")
-
-# Queue-based sentinel signaling: reader thread produces results, eval consumes.
-# Eliminates race conditions — queue.get() is atomic consumption.
-_result_queue = queue.Queue(maxsize=1)
-_reader_buf = []
-
 
 def _reader_thread(proc):
-    while True:
-        line = proc.stdout.readline()
-        if not line:
-            # Process died — signal immediately so callers don't hang
-            _result_queue.put("[HOL Light process died unexpectedly]")
-            break
-        if SENTINEL in line:
-            _result_queue.put("".join(_reader_buf).strip())
-            _reader_buf.clear()
-        else:
-            _reader_buf.append(line)
+    for line in iter(proc.stdout.readline, ""):
+        _output_buf.append(line)
 
 
 def _opam_env():
@@ -155,19 +129,15 @@ def _start_hol():
 def _wait_for_sentinel(timeout=None):
     if timeout is None:
         timeout = TIMEOUT
-    try:
-        return _result_queue.get(timeout=timeout)
-    except queue.Empty:
-        return "[timeout waiting for HOL Light response]"
-
-
-def _drain_queue():
-    """Discard any stale results in the queue."""
-    while not _result_queue.empty():
-        try:
-            _result_queue.get_nowait()
-        except queue.Empty:
-            break
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        for i, line in enumerate(_output_buf):
+            if SENTINEL in line:
+                result = "".join(_output_buf[:i])
+                _output_buf[:] = _output_buf[i + 1:]
+                return result.strip()
+        time.sleep(0.05)
+    return "[timeout waiting for HOL Light response]"
 
 
 def _load_helpers():
@@ -175,8 +145,7 @@ def _load_helpers():
     if _helpers_loaded:
         return
     helpers_path = os.path.join(MCP_DIR, "mcp_helpers.ml")
-    _drain_queue()
-    _reader_buf.clear()
+    _output_buf.clear()
     cmd = f'#use "{helpers_path}";;\nPrintf.printf "{SENTINEL}\\n%!";;\n'
     _proc.stdin.write(cmd)
     _proc.stdin.flush()
@@ -185,146 +154,50 @@ def _load_helpers():
         _helpers_loaded = True
     else:
         raise RuntimeError(f"Failed to load MCP helpers: {result}")
-    _replay_prefix()
 
 
-def _replay_prefix():
-    """Replay a tactic prefix on startup to restore proof state.
-
-    Loads replay_init (ML file) then replays replay_prefix (JSONL of tactics).
-    Both are optional; configured via hol-mcp.toml or env vars.
-    """
-    init_path = _config.get("replay_init") or os.environ.get("HOL_REPLAY_INIT")
-    prefix_path = _config.get("replay_prefix") or os.environ.get("HOL_REPLAY_PREFIX")
-    if not init_path and not prefix_path:
-        return
-    if init_path:
-        result, _ = _eval_raw(f'#use "{_ocaml_escape(init_path)}"')
-        if _is_error_output(_strip_ansi(result)):
-            return
-    if not prefix_path or not os.path.exists(prefix_path):
-        return
-    import json
-    replayed = []
-    try:
-        with open(prefix_path) as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                entry = json.loads(line)
-                if entry.get("action") == "backtrack":
-                    steps = entry.get("steps", 1)
-                    removed = 0
-                    while removed < steps and replayed:
-                        replayed.pop()
-                        _eval_raw("b()")
-                        removed += 1
-                elif entry.get("action") == "tactic":
-                    result, _ = _eval_raw(f'e({entry["tactic"]})')
-                    if _is_error_output(_strip_ansi(result)):
-                        for _ in range(len(replayed)):
-                            _eval_raw("b()")
-                        return
-                    replayed.append(entry)
-    except (json.JSONDecodeError, KeyError, OSError):
-        for _ in range(len(replayed)):
-            _eval_raw("b()")
-        return
-    global _recording, _recording_flushed
-    _recording = replayed
-    _recording_flushed = len(replayed)  # entries already on disk
-
-
-def _eval_raw(code: str, timeout: int = None) -> tuple[str, float]:
-    """Eval code, return (output, elapsed_seconds). Caller must hold _lock."""
-    _drain_queue()
-    _reader_buf.clear()
+def _eval_raw(code: str, timeout: int = None) -> str:
+    """Eval code, return raw output. Caller must hold _lock and ensure HOL is started."""
+    _output_buf.clear()
     full = code.rstrip()
     if not full.endswith(";;"):
         full += ";;"
     full += f'\nPrintf.printf "{SENTINEL}\\n%!";;\n'
-    t0 = time.time()
     _proc.stdin.write(full)
     _proc.stdin.flush()
-    result = _wait_for_sentinel(timeout)
-    return result, round(time.time() - t0, 3)
+    return _wait_for_sentinel(timeout)
 
 
-def _eval_code(code: str, timeout: int = None) -> tuple[str, float]:
+def _eval_code(code: str, timeout: int = None) -> str:
     with _lock:
         _start_hol()
         _load_helpers()
         return _eval_raw(code, timeout)
 
 
-def _eval_json(code: str, timeout: int = None) -> tuple[str, float]:
+def _eval_json(code: str, timeout: int = None) -> str:
     """Eval OCaml code that produces a string, print it to stdout, return it.
     Uses print_string to avoid OCaml's string truncation in REPL output."""
-    return _eval_code(f'print_string ({code}); print_newline ()', timeout)
+    with _lock:
+        _start_hol()
+        _load_helpers()
+        return _eval_raw(f'print_string ({code}); print_newline ()', timeout)
 
 
 def _strip_ansi(s: str) -> str:
     return ANSI_RE.sub("", s)
 
 
-def _truncate(s: str, limit: int) -> tuple[str, bool]:
-    """Truncate string to limit chars. Returns (result, was_truncated)."""
-    if len(s) <= limit:
-        return s, False
-    return s[:limit] + "... [truncated]", True
-
-
-def _is_error_output(s: str) -> bool:
-    """Heuristic: check if OCaml output indicates an error."""
-    for marker in ("Error:", "Exception:", "Failure", "Unbound", "Parse error",
-                   "Syntax error", "Type error", "This expression has type"):
-        if marker in s:
-            return True
-    return False
-
-
 @mcp.tool()
-def eval(code: str, timeout: int = None, max_output_chars: int = None) -> str:
-    """Evaluate OCaml/HOL Light code and return structured JSON.
+def eval(code: str, timeout: int = None) -> str:
+    """Evaluate OCaml/HOL Light code and return the output.
 
-    Args:
-        code: OCaml/HOL Light code to evaluate.
-        timeout: Optional timeout in seconds.
-        max_output_chars: Max chars for output field (default from config, typically 4000).
-
-    Returns JSON:
-        {"success": bool, "output": str, "output_truncated": bool,
-         "full_output_chars": int, "time_seconds": float}
+    Examples:
+        ARITH_RULE `1 + 1 = 2`;;
+        TAUT `p /\\ q ==> q /\\ p`;;
+        search [name "ARITH"];;
     """
-    import json as _json
-    # Detect recording patterns before eval
-    is_bt = _is_backtrack(code) if _recording_path else None
-    tac = _extract_e_tactic(code) if (_recording_path and not is_bt) else None
-
-    with _lock:
-        _start_hol()
-        _load_helpers()
-        raw, elapsed = _eval_raw(code, timeout)
-        raw = _strip_ansi(raw)
-        # Record e(...) and b() calls while still holding the lock
-        if _recording_path:
-            if is_bt:
-                _record_backtrack(1)
-            elif tac and not _is_error_output(raw):
-                gs_raw, _ = _eval_raw("print_string (mcp_json_after_tactic ()); print_newline ()")
-                _record_tactic(tac, _extract_json(gs_raw))
-
-    limit = max_output_chars if max_output_chars is not None else MAX_OUTPUT_CHARS
-    full_len = len(raw)
-    output, truncated = _truncate(raw, limit)
-    return _json.dumps({
-        "success": not _is_error_output(raw),
-        "output": output,
-        "output_truncated": truncated,
-        "full_output_chars": full_len,
-        "time_seconds": elapsed,
-    })
+    return _strip_ansi(_eval_code(code, timeout))
 
 
 @mcp.tool()
@@ -335,7 +208,7 @@ def goal_state() -> str:
                    "num_subgoals": N, "total_goals": M}
     Returns empty goals list if no proof is in progress.
     """
-    return _extract_json(_eval_json("mcp_json_goalstate ()")[0])
+    return _extract_json(_eval_json("mcp_json_goalstate ()"))
 
 
 @mcp.tool()
@@ -352,69 +225,15 @@ def apply_tactic(tactic: str, timeout: int = None) -> str:
       - Proof complete: {"proved": true, "theorem": "..."}
       - Error: {"error": "..."}
     """
-    code = (f'(try ignore(e({tactic})); '
-            f'print_string (mcp_json_after_tactic ()) '
-            f'with Failure s -> print_string (mcp_json_error s) '
-            f'| e -> print_string (mcp_json_error (Printexc.to_string e))); '
-            f'print_newline ()')
     with _lock:
         _start_hol()
         _load_helpers()
-        result = _extract_json(_eval_raw(code, timeout)[0])
-        _record_tactic(tactic, result)
-    return result
-
-
-@mcp.tool()
-def apply_tactics(tactics: list[str], timeout: int = None) -> str:
-    """Apply a list of tactics sequentially in a single round-trip.
-
-    Stops at the first error or when the proof is complete.
-
-    Args:
-        tactics: List of HOL Light tactic expressions.
-        timeout: Optional timeout in seconds for the entire batch.
-
-    Returns JSON with:
-      - Proof complete: {"proved": true, "theorem": "...", "steps": N}
-      - Error: {"error": "...", "step": N}
-      - Goal state after all tactics: goal state JSON with added "steps" field
-    """
-    if not tactics:
-        return '{"error":"empty tactic list"}'
-    tac_list = "[" + "; ".join(tactics) + "]"
-    code = (f'print_string (mcp_json_apply_tactics {tac_list}); print_newline ()')
-    with _lock:
-        _start_hol()
-        _load_helpers()
-        result = _extract_json(_eval_raw(code, timeout)[0])
-        _record_tactics_batch(tactics, result)
-    return result
-
-
-@mcp.tool()
-def prove(goal: str, tactic: str, timeout: int = None) -> str:
-    """Prove a theorem in one shot using a goal and tactic.
-
-    This is a convenience wrapper around HOL Light's prove() function.
-    Use for simple proofs that don't need interactive stepping.
-
-    Args:
-        goal: HOL Light term to prove (e.g., "`!n. n + 0 = n`")
-        tactic: Complete tactic to prove the goal (e.g., "GEN_TAC THEN ARITH_TAC")
-        timeout: Optional timeout in seconds.
-
-    Returns JSON:
-      - Success: {"proved": true, "theorem": "..."}
-      - Error: {"error": "..."}
-    """
-    code = (f'(try let th = prove({goal}, {tactic}) in '
-            f'print_string ("{{\\"proved\\":true,\\"theorem\\":" ^ '
-            f'mcp_json_string (string_of_thm th) ^ "}}") '
-            f'with Failure s -> print_string (mcp_json_error s) '
-            f'| e -> print_string (mcp_json_error (Printexc.to_string e))); '
-            f'print_newline ()')
-    return _extract_json(_eval_code(code, timeout)[0])
+        tac_result = _eval_raw(f"e({tactic})", timeout)
+        if "Exception" in tac_result or "Error" in tac_result or "Failure" in tac_result:
+            err = _strip_ansi(tac_result).strip()
+            return '{"error":' + _json_quote(err) + '}'
+        result = _eval_raw("print_string (mcp_json_after_tactic ()); print_newline ()")
+        return _extract_json(result)
 
 
 @mcp.tool()
@@ -426,12 +245,7 @@ def backtrack(steps: int = 1) -> str:
 
     Returns JSON goal state or {"error": "..."} if can't back up.
     """
-    with _lock:
-        _start_hol()
-        _load_helpers()
-        result = _extract_json(_eval_raw(f'print_string (mcp_json_backtrack {steps}); print_newline ()')[0])
-        _record_backtrack(steps)
-    return result
+    return _extract_json(_eval_json(f"mcp_json_backtrack {steps}"))
 
 
 @mcp.tool()
@@ -444,7 +258,7 @@ def search_theorems(name: str, limit: int = 20) -> str:
 
     Returns JSON array: [{"name": "...", "statement": "..."}, ...]
     """
-    return _extract_json(_eval_json(f'mcp_json_search "{_ocaml_escape(name)}" {limit}')[0])
+    return _extract_json(_eval_json(f'mcp_json_search "{_ocaml_escape(name)}" {limit}'))
 
 
 @mcp.tool()
@@ -456,9 +270,12 @@ def set_goal(goal: str) -> str:
 
     Returns JSON goal state.
     """
-    code = (f'ignore(g({goal})); '
-            f'print_string (mcp_json_goalstate ()); print_newline ()')
-    return _extract_json(_eval_code(code)[0])
+    with _lock:
+        _start_hol()
+        _load_helpers()
+        _eval_raw(f"g({goal})")
+        result = _eval_raw("print_string (mcp_json_goalstate ()); print_newline ()")
+        return _extract_json(result)
 
 
 @mcp.tool()
@@ -470,7 +287,7 @@ def hol_type(term: str) -> str:
 
     Returns the type as a string.
     """
-    return _strip_ansi(_eval_code(f"type_of {term}")[0])
+    return _strip_ansi(_eval_code(f"type_of {term}"))
 
 
 @mcp.tool()
@@ -480,21 +297,9 @@ def hol_load(file: str) -> str:
     Args:
         file: File path to load (e.g., "Library/words.ml")
 
-    Returns JSON:
-        {"success": bool, "file": str, "time_seconds": float}
-        On failure: {"success": false, "file": str, "error": str, "time_seconds": float}
+    Returns the output from loading.
     """
-    import json as _json
-    raw, elapsed = _eval_code(f'needs "{_ocaml_escape(file)}"')
-    raw = _strip_ansi(raw)
-    if _is_error_output(raw):
-        return _json.dumps({
-            "success": False, "file": file, "error": raw.strip(),
-            "time_seconds": elapsed,
-        })
-    return _json.dumps({
-        "success": True, "file": file, "time_seconds": elapsed,
-    })
+    return _strip_ansi(_eval_code(f'needs "{_ocaml_escape(file)}"'))
 
 
 @mcp.tool()
@@ -506,13 +311,11 @@ def hol_interrupt() -> str:
     a different tactic.
     """
     import signal
-    with _lock:
-        if _proc and _proc.poll() is None:
-            _proc.send_signal(signal.SIGINT)
-            time.sleep(0.5)
-            _drain_queue()
-            _reader_buf.clear()
-            return "Interrupt sent."
+    if _proc and _proc.poll() is None:
+        _proc.send_signal(signal.SIGINT)
+        time.sleep(0.5)
+        _output_buf.clear()
+        return "Interrupt sent."
     return "No HOL Light process running."
 
 
@@ -533,10 +336,7 @@ def hol_restart() -> str:
                 pass
             _proc = None
         _helpers_loaded = False
-        global _recording_flushed
-        _recording_flushed = len(_recording)
-        _drain_queue()
-        _reader_buf.clear()
+        _output_buf.clear()
         _start_hol()
         _load_helpers()
     return "HOL Light restarted."
@@ -547,8 +347,7 @@ def hol_status() -> str:
     """Check whether the HOL Light subprocess is alive.
 
     Returns JSON: {"alive": bool, "pid": int|null, "checkpoint": str,
-                   "config": str|null, "uptime_seconds": float|null,
-                   "timeout": int, "max_output_chars": int}
+                   "uptime_seconds": float|null, "timeout": int}
     """
     import json
     alive = _proc is not None and _proc.poll() is None
@@ -556,10 +355,8 @@ def hol_status() -> str:
         "alive": alive,
         "pid": _proc.pid if alive else None,
         "checkpoint": CHECKPOINT_NAME,
-        "config": CONFIG_PATH,
         "uptime_seconds": round(time.time() - _start_time, 1) if alive and _start_time else None,
         "timeout": TIMEOUT,
-        "max_output_chars": MAX_OUTPUT_CHARS,
     })
 
 
@@ -579,151 +376,6 @@ def _ocaml_escape(s: str) -> str:
 
 def _json_quote(s: str) -> str:
     return '"' + s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n") + '"'
-
-
-# --- Proof recording helpers ---
-
-def _flush_recording():
-    """Append new entries to the recording file.
-    Only writes entries added since the last flush (tracked by _recording_flushed).
-    Backtrack writes a marker so replay can skip undone tactics.
-    """
-    import json
-    if not _recording_path:
-        return
-    with open(_recording_path, 'a') as f:
-        global _recording_flushed
-        for entry in _recording[_recording_flushed:]:
-            f.write(json.dumps(entry) + "\n")
-        _recording_flushed = len(_recording)
-
-
-_recording_flushed = 0  # index of first unflushed entry
-
-
-def _record_tactic(tactic_str, result_json_str):
-    """Record a successful tactic application."""
-    import json
-    if not _recording_path:
-        return
-    try:
-        result = json.loads(result_json_str)
-    except (json.JSONDecodeError, TypeError):
-        return
-    if "error" in result:
-        return
-    total = 0 if result.get("proved") else result.get("total_goals", 0)
-    _recording.append({"action": "tactic", "tactic": tactic_str, "total_goals": total})
-    _flush_recording()
-
-
-def _record_backtrack(steps):
-    """Record a backtrack marker and remove entries from in-memory list."""
-    global _recording_flushed
-    if not _recording_path:
-        return
-    removed = 0
-    while removed < steps and _recording:
-        if _recording[-1]["action"] == "tactic":
-            _recording.pop()
-            if _recording_flushed > len(_recording):
-                _recording_flushed = len(_recording)
-            removed += 1
-        else:
-            break
-    if removed > 0:
-        _recording.append({"action": "backtrack", "steps": removed})
-    _flush_recording()
-
-
-def _record_tactics_batch(tactics, result_json_str):
-    """Record successful tactics from an apply_tactics batch."""
-    import json
-    if not _recording_path:
-        return
-    try:
-        result = json.loads(result_json_str)
-    except (json.JSONDecodeError, TypeError):
-        return
-    if "error" in result and "step" in result:
-        # step = number of tactics that succeeded before the error
-        succeeded = result["step"]
-    elif "steps" in result:
-        succeeded = result["steps"]
-    else:
-        return
-    for i, tac in enumerate(tactics[:succeeded]):
-        if i == succeeded - 1:
-            total = 0 if result.get("proved") else result.get("total_goals", 0)
-        else:
-            total = 0
-        _recording.append({"action": "tactic", "tactic": tac, "total_goals": total})
-    if succeeded > 0:
-        _flush_recording()
-
-
-def _extract_e_tactic(code: str) -> str | None:
-    """Extract tactic string from 'e(TACTIC);;' pattern using paren counting."""
-    stripped = code.strip()
-    m = re.match(r'\s*e\s*\(', stripped)
-    if not m:
-        return None
-    start = m.end()
-    depth = 1
-    in_str = False
-    in_backtick = False
-    in_comment = 0
-    esc = False
-    i = start
-    while i < len(stripped):
-        c = stripped[i]
-        if esc:
-            esc = False
-            i += 1
-            continue
-        if in_comment > 0:
-            if c == '(' and i + 1 < len(stripped) and stripped[i + 1] == '*':
-                in_comment += 1
-                i += 2
-            elif c == '*' and i + 1 < len(stripped) and stripped[i + 1] == ')':
-                in_comment -= 1
-                i += 2
-            else:
-                i += 1
-            continue
-        if c == '\\' and in_str:
-            esc = True
-            i += 1
-            continue
-        if c == '"' and not in_backtick:
-            in_str = not in_str
-            i += 1
-            continue
-        if c == '`' and not in_str:
-            in_backtick = not in_backtick
-            i += 1
-            continue
-        if in_str or in_backtick:
-            i += 1
-            continue
-        if c == '(' and i + 1 < len(stripped) and stripped[i + 1] == '*':
-            in_comment = 1
-            i += 2
-            continue
-        if c == '(':
-            depth += 1
-        elif c == ')':
-            depth -= 1
-            if depth == 0:
-                return stripped[start:i].strip()
-        i += 1
-    return None
-
-
-def _is_backtrack(code: str) -> bool:
-    """Check if code is a b() call."""
-    stripped = code.strip().rstrip(';').strip()
-    return bool(re.match(r'^b\s*\(\s*\)\s*$', stripped))
 
 
 def _extract_json(output: str) -> str:
@@ -761,41 +413,6 @@ def _extract_json(output: str) -> str:
                 if depth == 0:
                     return stripped[idx:i+1]
     return '{"error":' + _json_quote(f"Unexpected output: {stripped[:200]}") + '}'
-
-
-@mcp.tool()
-def start_recording(path: str) -> str:
-    """Start recording proof tactics to a JSONL file.
-
-    Args:
-        path: File path for the recording (e.g., "/tmp/recording.jsonl")
-
-    Returns confirmation message.
-    """
-    global _recording_path, _recording
-    with _lock:
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        _recording_path = path
-        _recording = []
-        global _recording_flushed
-        _recording_flushed = 0
-        open(path, 'w').close()  # truncate any existing file
-    return f"Recording started: {path}"
-
-
-@mcp.tool()
-def stop_recording() -> str:
-    """Stop recording proof tactics and return the recording path.
-
-    Returns the path to the recording file.
-    """
-    global _recording_path
-    with _lock:
-        path = _recording_path
-        _recording_path = None
-    if path:
-        return f"Recording stopped: {path}"
-    return "No recording was active."
 
 
 def main():
