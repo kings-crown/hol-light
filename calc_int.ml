@@ -17,7 +17,7 @@ let is_realintconst tm =
   match tm with
     Comb(Const("real_of_num",_),n) -> is_numeral n
   | Comb(Const("real_neg",_),Comb(Const("real_of_num",_),n)) ->
-      is_numeral n && not(dest_numeral n = num_0)
+      is_numeral n && not(dest_numeral n =/ num_0)
   | _ -> false;;
 
 let dest_realintconst tm =
@@ -56,7 +56,7 @@ let term_of_rat =
   fun x ->
     let p,q = numdom x in
     let ptm = mk_realintconst p in
-    if q = num_1 then ptm
+    if q =/ num_1 then ptm
     else mk_comb(mk_comb(div_tm,ptm),mk_realintconst q);;
 
 (* ------------------------------------------------------------------------- *)
