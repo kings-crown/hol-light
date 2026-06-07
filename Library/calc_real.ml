@@ -2170,7 +2170,7 @@ let REALCALC_CONV,thm_eval,raw_eval,thm_wrap =
         and q = log2(abs_num(raw_eval rfn2 s)) in
         let k = q +/ r +/ num 1
         and l = p +/ s +/ num 1 in
-        if p =/ num 0 && q = num 0 then
+        if p =/ num 0 && q =/ num 0 then
           if k </ l then k +/ num 1,l else k,l +/ num 1
         else k,l in
       let raw_fn acc =
